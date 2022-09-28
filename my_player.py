@@ -18,11 +18,24 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 """
 from avalam import *
-
+import math
 
 class MyAgent(Agent):
 
     """My Avalam agent."""
+    
+    def initialize(self, percepts, players, time_left):
+        """Begin a new game.
+        The computation done here also counts in the time credit.
+        Arguments:
+        percepts -- the initial board in a form that can be fed to the Board
+            constructor.
+        players -- sequence of players this agent controls
+        time_left -- a float giving the number of seconds left from the time
+            credit for this agent (all players taken together). If the game is
+            not time-limited, time_left is None.
+        """
+        pass
 
     def play(self, percepts, player, step, time_left):
         """
@@ -44,9 +57,62 @@ class MyAgent(Agent):
         print("step:", step)
         print("time left:", time_left if time_left else '+inf')
 
-        # TODO: implement your agent and return an action for the current step.
-        pass
+        board = dict_to_board(percepts)
+        board.get_percepts((player == -1))
 
+        action = self.h_alphabeta_search(board)[1]
+        print("Action played:", action)
+        return action
+
+    def h_alphabeta_search(
+        self,
+        board,
+        cutoff=lambda board, depth: depth > 2,
+        heuristic=lambda board : board.get_score()
+    ):
+        """Search game to determine best action; use alpha-beta pruning."""
+
+        def max_value(board, alpha, beta, depth):
+            if (board.is_finished()):
+                return (board.get_score())
+
+            if (cutoff(board, depth)):
+                return (heuristic(board), None)
+            
+            best_value = - math.inf
+            best_action = None
+            for action in board.get_actions():
+                new_board = board.clone()
+                child_value = min_value(new_board, alpha, beta, depth+1)[0]
+                if (child_value > best_value):
+                    best_value = child_value
+                    best_action = action
+                    alpha = max(alpha, best_value)
+                    if (alpha >= beta):
+                        break
+            return (best_value, best_action)
+
+        def min_value(board, alpha, beta, depth):
+            if (board.is_finished()):
+                return (board.get_score())
+
+            if (cutoff(board, depth)):
+                return (heuristic(board), None)
+            
+            best_value = math.inf
+            best_action = None
+            for action in board.get_actions():
+                new_board = board.clone()
+                child_value = max_value(new_board, alpha, beta, depth+1)[0]
+                if (child_value < best_value):
+                    best_value = child_value
+                    best_action = action
+                    beta = min(beta, best_value)
+                    if (alpha >= beta):
+                        break
+            return (best_value, best_action)
+
+        return max_value(board, -math.inf, math.inf, 0)
 
 if __name__ == "__main__":
     agent_main(MyAgent())
