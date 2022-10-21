@@ -20,6 +20,56 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 from avalam import *
 import math
 
+class CleanedBoard(Board):
+
+    max_height = 5
+    initial_board = [ [ 0,  0,  1, -1,  0,  0,  0,  0,  0],
+                      [ 0,  1, -1,  1, -1,  0,  0,  0,  0],
+                      [ 0, -1,  1, -1,  1, -1,  1,  0,  0],
+                      [ 0,  1, -1,  1, -1,  1, -1,  1, -1],
+                      [ 1, -1,  1, -1,  0, -1,  1, -1,  1],
+                      [-1,  1, -1,  1, -1,  1, -1,  1,  0],
+                      [ 0,  0,  1, -1,  1, -1,  1, -1,  0],
+                      [ 0,  0,  0,  0, -1,  1, -1,  1,  0],
+                      [ 0,  0,  0,  0,  0, -1,  1,  0,  0] ]
+
+    def __init__(self, board : Board):
+        super(self)
+        self.m = board.m
+        self.rows = board.rows
+        self.columns = board.columns
+        self.max_height = board.max_height
+
+        # Compute the heuristic of the board, i.e. the difference between the non-movable towers of the
+        # player and the non-movable towers of its opponent.
+        self.score = board.get_score()
+        for (i,j,_) in board.get_towers:
+            if not board.is_tower_movable(i,j):
+                self.m[i][j] = 0
+    
+        self._rotation = lambda m : [[m[m.columns - j][i] for i in range(m.rows)] for j in range(m.columns)]
+        self._reflexion = lambda m : [[m[m.rows - i][j] for j in range(m.columns)] for i in range(m.rows)]
+        self._invert = lambda m : [[-m[i][j] for j in range(m.columns)] for i in range(m.rows)]
+
+        self._symetry_functions = [
+            lambda m : m,
+            lambda m : self._rotation(m),
+            lambda m : self._rotation(self._rotation(m)),
+            lambda m : self._rotation(self._rotation(self._rotation(m))),
+            lambda m : self._reflexion(self._rotation(m)),
+            lambda m : self._reflexion(self._rotation(self._rotation(m))),
+            lambda m : self._reflexion(self._rotation(self._rotation(self._rotation(m))))
+        ]
+
+    def are_similar(self, other):
+        return any([symetry(other.m) == self.m for symetry in self._symetry_functions])
+
+    def are_invert_similar(self, other):
+        return any([self._invert(symetry(other.m)) == self.m for symetry in self._symetry_functions])
+    
+    def get_score(self):
+        return self.score
+
 class MyAgent(Agent):
 
     """My Avalam agent."""
