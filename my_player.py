@@ -20,78 +20,35 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 from avalam import *
 import math
 import time
+import random
 
 BOARD_MEMORY_MAX_DEPTH = 0
 BOARD_MEMORY_HEURISTICS = 1
 BOARD_MEMORY_BEST_ACTION = 2
 
-class CleanedBoard():
-    def __init__(self, board : Board):
-        self._board = board
-        self._cleaned_m = board.m
-        self._garanteed_score = 0
+def clean_board(board : Board):
+    cleaned_towers_score = 0
+    cleaned_board = board.clone()
 
-        # Compute the heuristic of the board, i.e. the difference between the non-movable towers of the
-        # player and the non-movable towers of its opponent.
-        for (i,j,value) in board.get_towers():
-            if not board.is_tower_movable(i,j):
-                self._cleaned_m[i][j] = 0
-                self._garanteed_score += 1 if (value > 0) else -1
-
-        # Define the group of symetry functions
-        self._rotation = lambda m : [[m[board.columns - j][i] for i in range(board.rows)] for j in range(board.columns)]
-        self._reflexion = lambda m : [[m[board.rows - i][j] for j in range(board.columns)] for i in range(board.rows)]
-        self._invert = lambda m : [[-m[i][j] for j in range(board.columns)] for i in range(board.rows)]
-
-        self._symetry_functions = [
-            lambda m : m,
-            lambda m : self._rotation(m),
-            lambda m : self._rotation(self._rotation(m)),
-            lambda m : self._rotation(self._rotation(self._rotation(m))),
-            lambda m : self._reflexion(self._rotation(m)),
-            lambda m : self._reflexion(self._rotation(self._rotation(m))),
-            lambda m : self._reflexion(self._rotation(self._rotation(self._rotation(m))))
-        ]
-
-    def get_cleaned_m(self):
-        return self._cleaned_m
-
-    def get_garanteed_score(self):
-        return self._garanteed_score
-
-    def get_score(self):
-        return self._board.get_score()
+    for (i,j,value) in cleaned_board.get_towers():
+        if not cleaned_board.is_tower_movable(i,j):
+            cleaned_board.m[i][j] = 0
+            cleaned_towers_score += 1 if (value > 0) else -1
     
-    def clone(self):
-        return CleanedBoard(self._board)
+    return (cleaned_towers_score, cleaned_board)
 
-    def is_finished(self):
-        return self._board.is_finished()
-    
-    def get_actions(self):
-        for i, j, h in self._board.get_towers():
-            for action in self._board.get_tower_actions(i, j):
-                yield action
-    
-    def get_similar_boards_m(self):
-        for s in self._symetry_functions:
-            yield s(self._cleaned_m)
+def get_nb_towers_tuple(board_matrix):
+    sum = 0
+    for i in board_matrix:
+        for j in i:
+            if (j!=0):
+                sum += 1
+    return sum
 
-class CleanedBoardMemory():
-    def __init__(self):
-        self._dictionary = {}
-    
-    def add_board(self, cleaned_board : CleanedBoard, depth, additionnal_score):
-        cleaned_m = cleaned_board.get_cleaned_m()
-        if ((not cleaned_m in self._dictionary) 
-         or ((cleaned_m in self._dictionary) and (depth > self._dictionary[cleaned_m][0]))):
-            self._dictionary[cleaned_m] = (depth, additionnal_score)
-    
-    def get_board(self, cleaned_board : CleanedBoard, depth):
-        for cleaned_m in cleaned_board.get_similar_boards_m():
-            if ((cleaned_m in self._dictionary) and (depth <= self._dictionary[cleaned_m][0])):
-                return True, self._dictionary[cleaned_m][1]
-        return False, 0
+def shuffle_random(actions_generator):
+    actions_list = list(actions_generator)
+    random.shuffle(actions_list)
+    return actions_list
 
 class MyAgent(Agent):
 
@@ -99,11 +56,23 @@ class MyAgent(Agent):
     def __init__(self):
         self._board_memory_max = {}
         self._board_memory_min = {}
+
         self._stats_memoized_min_max_steps = 0
         self._stats_total_min_max_steps = 0
         self._stats_turn_duration_sec = 0
         self._stats_memory_nb_boards_min = 0
         self._stats_memory_nb_boards_max = 0
+
+        self._symetry_functions = (
+            lambda m : ((m[         i][            j] for j in range(len(m[0]))) for i in range(len(m))),
+            lambda m : ((m[         i][len(m[0]) - j] for j in range(len(m[0]))) for i in range(len(m))),
+            lambda m : ((m[len(m) - i][            j] for j in range(len(m[0]))) for i in range(len(m))),
+            lambda m : ((m[len(m) - i][len(m[0]) - j] for j in range(len(m[0]))) for i in range(len(m))),
+            lambda m : ((m[            j][         i] for i in range(len(m)))    for j in range(len(m[0]))),
+            lambda m : ((m[len(m[0]) - j][         i] for i in range(len(m)))    for j in range(len(m[0]))),
+            lambda m : ((m[            j][len(m) - i] for i in range(len(m)))    for j in range(len(m[0]))),
+            lambda m : ((m[len(m[0]) - j][len(m) - i] for i in range(len(m)))    for j in range(len(m[0])))
+        )
 
 ###################################################################################################
     def initialize(self, percepts, players, time_left):
@@ -137,7 +106,7 @@ class MyAgent(Agent):
         """
         # Get the board and revert it if the agent controls the second player
         board = dict_to_board(percepts)
-        board.get_percepts((player == -1))
+        board.m = board.get_percepts((player == -1))
 
         # Reset the statistics
         self._stats_memoized_min_max_steps = 0
@@ -146,7 +115,7 @@ class MyAgent(Agent):
 
         # Compute the turn
         init_time = time.time()
-        action = self.progressive_alpha_beta_search(board, 5)
+        action = self.progressive_alpha_beta_search(board, 5, heuristic=lambda m : 0)
         self._stats_turn_duration_sec = time.time() - init_time
 
         # Compute statistics
@@ -166,7 +135,7 @@ class MyAgent(Agent):
         board : Board,
         max_depth : int,
         heuristic=lambda board : board.get_score()
-    ):
+    ) -> tuple([int, int, int, int]):
         """Search game to determine best action; use alpha-beta pruning."""
 
         def max_value(board, alpha, beta, remaining_depth):        
@@ -182,17 +151,29 @@ class MyAgent(Agent):
             
             # If the board is already in memory, with a depth searched at least equal to the
             # one we're looking for, we take it
-            if board in self._board_memory_max:
-                if self._board_memory_max[board][BOARD_MEMORY_MAX_DEPTH] >= remaining_depth:
-                    self._stats_memoized_min_max_steps += 1
-                    return (self._board_memory_max[board][BOARD_MEMORY_HEURISTICS], self._board_memory_max[board][BOARD_MEMORY_BEST_ACTION])
+            found, best_value, best_action = self.found_board_in_memory(board, remaining_depth, self._board_memory_max)
+            
+            if found:
+                self._stats_memoized_min_max_steps += 1
+                return (best_value, best_action)
             
             # Else, we compute it as for a normal alpha beta
             best_value = - math.inf
             best_action = None
-            for action in board.get_actions():
+
+            for action in shuffle_random(board.get_actions()):
+
+                # Create the child board
                 new_board = board.clone()
-                child_value = min_value(new_board, alpha, beta, remaining_depth - 1)[0]
+                new_board = new_board.play_action(action)
+
+                child_value = min_value(
+                    new_board,
+                    alpha,
+                    beta,
+                    remaining_depth - 1
+                )[0]
+
                 if (child_value > best_value):
                     best_value = child_value
                     best_action = action
@@ -201,7 +182,7 @@ class MyAgent(Agent):
                         break
             
             # Once computed, the result is stored in memory
-            self._board_memory_max[board] = (remaining_depth, best_value, best_action)
+            self.store_board_in_memory(board, remaining_depth, best_value, best_action, self._board_memory_max)
 
             return (best_value, best_action)
 
@@ -215,22 +196,32 @@ class MyAgent(Agent):
 
             if (remaining_depth < 0):
                 return (heuristic(board), None)
-
+            
             # If the board is already in memory, with a depth searched at least equal to the
             # one we're looking for, we take it
-            if board in self._board_memory_min:
-                if self._board_memory_min[board][BOARD_MEMORY_MAX_DEPTH] >= remaining_depth:
-                    self._stats_memoized_min_max_steps += 1
-                    return (self._board_memory_min[board][BOARD_MEMORY_HEURISTICS], self._board_memory_min[board][BOARD_MEMORY_BEST_ACTION])
+            found, best_value, best_action = self.found_board_in_memory(board, remaining_depth, self._board_memory_min)
+            
+            if found:
+                self._stats_memoized_min_max_steps += 1
+                return (best_value, best_action)
             
             # Else, we compute it as for a normal alpha beta
             best_value = math.inf
             best_action = None
 
-            for action in board.get_actions():
-                # TODO : Order the actions by pertinence, for instance by rising up the actions near the movement
+            for action in shuffle_random(board.get_actions()):
+
+                # Create the child board, and clean it
                 new_board = board.clone()
-                child_value = max_value(new_board, alpha, beta, remaining_depth - 1)[0]
+                new_board = new_board.play_action(action)
+
+                child_value = max_value(
+                    new_board,
+                    alpha,
+                    beta,
+                    remaining_depth - 1
+                )[0]
+                
                 if (child_value < best_value):
                     best_value = child_value
                     best_action = action
@@ -239,11 +230,13 @@ class MyAgent(Agent):
                         break
             
             # Once computed, the result is stored in memory
-            self._board_memory_min[board] = (remaining_depth, best_value, best_action)
+            self.store_board_in_memory(board, remaining_depth, best_value, best_action, self._board_memory_min)
 
             return (best_value, best_action)
 
-        return max_value(board, -math.inf, math.inf, max_depth)
+        best_value, best_action = max_value(board, -math.inf, math.inf, max_depth)
+        print(f"Finished alpha_beta with depth {max_depth} : best_value = {best_value}")
+        return best_action
 
 ###################################################################################################
     def progressive_alpha_beta_search(
@@ -251,16 +244,57 @@ class MyAgent(Agent):
         board : Board,
         max_time_sec : float,
         heuristic=lambda board : board.get_score()
-    ):
+    ) -> tuple([int, int, int, int]):
         init_time = time.time()
         chosen_action = None
-        explored_depth = 1
+        explored_depth = 2
 
-        while ((time.time() - init_time < max_time_sec) and (explored_depth <= 2)):
+        while ((time.time() - init_time < max_time_sec) and (explored_depth <= 5)):
+            chosen_action = self.alpha_beta_search(board, explored_depth, heuristic)
             explored_depth += 1
-            print(f"Start thinking on action {explored_depth}")
-            chosen_action = self.alpha_beta_search(board, explored_depth, heuristic)[1]
+            print(list(map(get_nb_towers_tuple, self._board_memory_max.keys())))
+            print(list(map(lambda m:(m[0], m[1]), self._board_memory_max.values())))
+            while (True):
+                pass
         return chosen_action
+
+###################################################################################################
+    def found_board_in_memory(
+        self,
+        board : Board,
+        depth_searched : int,
+        memory : dict
+    ) -> tuple([bool, float, tuple([int, int, int, int])]):
+        cleaned_towers_score, cleaned_board = clean_board(board)
+        cleaned_board_matrix = cleaned_board.m
+        cleaned_board_tuple  = tuple(map(tuple, cleaned_board_matrix))
+
+        for symetry in self._symetry_functions:
+            cleaned_board_tuple_sym = symetry(cleaned_board_tuple)
+            if cleaned_board_tuple_sym in memory:
+                if (memory[cleaned_board_tuple_sym][BOARD_MEMORY_MAX_DEPTH] >= depth_searched):
+                    return (
+                        True,
+                        memory[cleaned_board_tuple_sym][BOARD_MEMORY_HEURISTICS] + cleaned_towers_score,
+                        memory[cleaned_board_tuple_sym][BOARD_MEMORY_BEST_ACTION]
+                    )
+        
+        return (False, 0, None)
+
+###################################################################################################
+    def store_board_in_memory(
+        self,
+        board : Board,
+        depth_searched : int,
+        heuristics : float,
+        best_action : tuple([int, int, int, int]),
+        memory : dict
+    ) -> None:
+        cleaned_towers_score, cleaned_board = clean_board(board)
+        cleaned_board_matrix = cleaned_board.m
+        cleaned_board_tuple  = tuple(map(tuple, cleaned_board_matrix))
+
+        memory[cleaned_board_tuple] = (depth_searched, heuristics - cleaned_towers_score, best_action)
 
 ###################################################################################################
 if __name__ == "__main__":
