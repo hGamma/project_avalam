@@ -21,33 +21,43 @@ from avalam import *
 import math
 import time
 import random
+import copy
 
 BOARD_MEMORY_MAX_DEPTH = 0
 BOARD_MEMORY_HEURISTICS = 1
 BOARD_MEMORY_BEST_ACTION = 2
 
-def clean_board(board : Board):
-    cleaned_towers_score = 0
-    cleaned_board = board.clone()
+initial_board = [ [ 0,  0,  1, -1,  0,  0,  0,  0,  0],
+                  [ 0,  1, -1,  1, -1,  0,  0,  0,  0],
+                  [ 0, -1,  1, -1,  1, -1,  1,  0,  0],
+                  [ 0,  1, -1,  1, -1,  1, -1,  1, -1],
+                  [ 1, -1,  1, -1,  0, -1,  1, -1,  1],
+                  [-1,  1, -1,  1, -1,  1, -1,  1,  0],
+                  [ 0,  0,  1, -1,  1, -1,  1, -1,  0],
+                  [ 0,  0,  0,  0, -1,  1, -1,  1,  0],
+                  [ 0,  0,  0,  0,  0, -1,  1,  0,  0] ]
 
-    for (i,j,value) in cleaned_board.get_towers():
-        if not cleaned_board.is_tower_movable(i,j):
-            cleaned_board.m[i][j] = 0
+def clean_board(
+    board : Board
+):
+    cleaned_towers_score = 0
+    cleaned_board = copy.deepcopy(board.m)
+
+    for (i,j,value) in board.get_towers():
+        if not board.is_tower_movable(i,j):
+            cleaned_board[i][j] = 0
             cleaned_towers_score += 1 if (value > 0) else -1
     
-    return (cleaned_towers_score, cleaned_board)
-
-def get_nb_towers_tuple(board_matrix):
-    sum = 0
-    for i in board_matrix:
-        for j in i:
-            if (j!=0):
-                sum += 1
-    return sum
+    return (cleaned_towers_score, tuple(map(tuple, cleaned_board)))
 
 def shuffle_random(actions_generator):
     actions_list = list(actions_generator)
     random.shuffle(actions_list)
+    return actions_list
+
+def shuffle_near_action(actions_generator, hole_made_by_opponent):
+    actions_list = list(actions_generator)
+    actions_list.sort(key=lambda action: max(abs(action[0] - hole_made_by_opponent[0]), abs(action[1] - hole_made_by_opponent[1])))
     return actions_list
 
 class MyAgent(Agent):
@@ -56,23 +66,13 @@ class MyAgent(Agent):
     def __init__(self):
         self._board_memory_max = {}
         self._board_memory_min = {}
+        self._last_given_board = initial_board
 
         self._stats_memoized_min_max_steps = 0
         self._stats_total_min_max_steps = 0
         self._stats_turn_duration_sec = 0
         self._stats_memory_nb_boards_min = 0
         self._stats_memory_nb_boards_max = 0
-
-        self._symetry_functions = (
-            lambda m : ((m[         i][            j] for j in range(len(m[0]))) for i in range(len(m))),
-            lambda m : ((m[         i][len(m[0]) - j] for j in range(len(m[0]))) for i in range(len(m))),
-            lambda m : ((m[len(m) - i][            j] for j in range(len(m[0]))) for i in range(len(m))),
-            lambda m : ((m[len(m) - i][len(m[0]) - j] for j in range(len(m[0]))) for i in range(len(m))),
-            lambda m : ((m[            j][         i] for i in range(len(m)))    for j in range(len(m[0]))),
-            lambda m : ((m[len(m[0]) - j][         i] for i in range(len(m)))    for j in range(len(m[0]))),
-            lambda m : ((m[            j][len(m) - i] for i in range(len(m)))    for j in range(len(m[0]))),
-            lambda m : ((m[len(m[0]) - j][len(m) - i] for i in range(len(m)))    for j in range(len(m[0])))
-        )
 
 ###################################################################################################
     def initialize(self, percepts, players, time_left):
@@ -115,8 +115,12 @@ class MyAgent(Agent):
 
         # Compute the turn
         init_time = time.time()
-        action = self.progressive_alpha_beta_search(board, 5, heuristic=lambda m : 0)
+        action = self.progressive_alpha_beta_search(board, 5, heuristic=lambda board: clean_board(board)[0] + 0.1 * board.get_score())
         self._stats_turn_duration_sec = time.time() - init_time
+
+        # Actualize board memory
+        board.play_action(action)
+        self._last_given_board = copy.deepcopy(board.m)
 
         # Compute statistics
         self._stats_memory_nb_boards_min = len(self._board_memory_min)
@@ -161,7 +165,7 @@ class MyAgent(Agent):
             best_value = - math.inf
             best_action = None
 
-            for action in shuffle_random(board.get_actions()):
+            for action in shuffle_near_action(board.get_actions(), self.detect_action_played_by_opponent(board.m)):
 
                 # Create the child board
                 new_board = board.clone()
@@ -209,9 +213,9 @@ class MyAgent(Agent):
             best_value = math.inf
             best_action = None
 
-            for action in shuffle_random(board.get_actions()):
+            for action in shuffle_near_action(board.get_actions(), self.detect_action_played_by_opponent(board.m)):
 
-                # Create the child board, and clean it
+                # Create the child board
                 new_board = board.clone()
                 new_board = new_board.play_action(action)
 
@@ -243,19 +247,18 @@ class MyAgent(Agent):
         self,
         board : Board,
         max_time_sec : float,
+        max_depth = 5,
+        min_depth = 2,
         heuristic=lambda board : board.get_score()
     ) -> tuple([int, int, int, int]):
         init_time = time.time()
         chosen_action = None
-        explored_depth = 2
+        explored_depth = min_depth
 
-        while ((time.time() - init_time < max_time_sec) and (explored_depth <= 5)):
+        while ((time.time() - init_time < max_time_sec) and (explored_depth <= max_depth - 1)):
             chosen_action = self.alpha_beta_search(board, explored_depth, heuristic)
             explored_depth += 1
-            print(list(map(get_nb_towers_tuple, self._board_memory_max.keys())))
-            print(list(map(lambda m:(m[0], m[1]), self._board_memory_max.values())))
-            while (True):
-                pass
+        
         return chosen_action
 
 ###################################################################################################
@@ -266,19 +269,15 @@ class MyAgent(Agent):
         memory : dict
     ) -> tuple([bool, float, tuple([int, int, int, int])]):
         cleaned_towers_score, cleaned_board = clean_board(board)
-        cleaned_board_matrix = cleaned_board.m
-        cleaned_board_tuple  = tuple(map(tuple, cleaned_board_matrix))
 
-        for symetry in self._symetry_functions:
-            cleaned_board_tuple_sym = symetry(cleaned_board_tuple)
-            if cleaned_board_tuple_sym in memory:
-                if (memory[cleaned_board_tuple_sym][BOARD_MEMORY_MAX_DEPTH] >= depth_searched):
-                    return (
-                        True,
-                        memory[cleaned_board_tuple_sym][BOARD_MEMORY_HEURISTICS] + cleaned_towers_score,
-                        memory[cleaned_board_tuple_sym][BOARD_MEMORY_BEST_ACTION]
-                    )
-        
+        if cleaned_board in memory:
+            if (memory[cleaned_board][BOARD_MEMORY_MAX_DEPTH] >= depth_searched):
+                return (
+                    True,
+                    memory[cleaned_board][BOARD_MEMORY_HEURISTICS] + cleaned_towers_score,
+                    memory[cleaned_board][BOARD_MEMORY_BEST_ACTION]
+                )
+
         return (False, 0, None)
 
 ###################################################################################################
@@ -291,10 +290,18 @@ class MyAgent(Agent):
         memory : dict
     ) -> None:
         cleaned_towers_score, cleaned_board = clean_board(board)
-        cleaned_board_matrix = cleaned_board.m
-        cleaned_board_tuple  = tuple(map(tuple, cleaned_board_matrix))
+        memory[cleaned_board] = (depth_searched, heuristics - cleaned_towers_score, best_action)
 
-        memory[cleaned_board_tuple] = (depth_searched, heuristics - cleaned_towers_score, best_action)
+###################################################################################################
+    def detect_action_played_by_opponent(
+        self,
+        board_matrix_new
+    ):
+        for i in range(len(board_matrix_new)):
+            for j in range(len(board_matrix_new[0])):
+                if (board_matrix_new[i][j] == 0) and (self._last_given_board[i][j] != 0):
+                    return (i,j)
+        return (random.randint(0, len(board_matrix_new) - 1), random.randint(0, len(board_matrix_new[0]) - 1))
 
 ###################################################################################################
 if __name__ == "__main__":
